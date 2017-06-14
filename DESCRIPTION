@@ -11,6 +11,7 @@ Suggests: knitr,
     rmarkdown
 VignetteBuilder: knitr
 Imports: tidyverse,
-    stringr
+    stringr,
     tpur
 Remotes: abjur/tpur
+RoxygenNote: 6.0.1
