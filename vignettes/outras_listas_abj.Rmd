@@ -1,0 +1,256 @@
+---
+title: "Listas de Processos consumeristas"
+author: "Fernando Corrêa"
+date: "13 de junho de 2017"
+output: html_document
+---
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(forcats)
+library(esaj)
+library(tjsp)
+```
+
+# Introdução
+
+Este texto tem como objetivo listar os assuntos processuais associados ao tema "direito do consumidor" usando como base os processos judiciais disponíveis na ferramenta de pesquisa "Consulta de Julgados de Primeiro Grau" do TJSP. É possível resolver esse problema utilizando a Tabela Processual Unificada de assunto, dispobilizada pelo CNJ, mas a principal dúvida é se existem muitos processos de direito do consumidor que não respeitam a classificação sugerida.
+
+Para isso, fizemos o levantamento de listas de sentenças do TJSP por assunto e por ano, com base nos assuntos descritos na Tabelas Processuais Unificadas (TPUs, Res. 46 CNJ). Em cada uma dessas listas, detectamos a presença de um conjunto de palavras chave que estão associadas à justiça consumerista. Quando a busca de termos retornou algum conteúdo, utilizamos o resultado para classificar um assunto como "potencialmente consumerista".
+
+Para identificar possíveis distorções, a lista de assuntos consumeristas obtida empiricamente foi comparada à listas obtidas por classificação manual pela ABJ e à lista de assuntos consumeristas extraída diretamente da TPU.
+
+# Metodologia
+
+O primeiro passo do estudo foi levantar a lista de assuntos na página do TJSP. Em seguida, retiramos da lista aqueles assuntos da TPU que provavelmente não estão associados à justiça consumerista. Esse filtro foi feito retirando todos os assuntos que decorrem dos seguintes assuntos gerais:
+
+- "DIREITO PENAL"
+- "DIREITO DA CRIANÇA DE DO ADOLESCENTE"
+- "DIREITO DO TRABALHO"
+- "DIREITO PROCESSUAL PENAL"
+- "DIREITO MARÍTMO"
+
+A lista de assuntos final continha 753 assuntos gerais.
+
+```{r}
+# assuntos <- cjpg_tabs('assunto')
+# write_rds(assuntos, 'assuntos.rds')
+assuntos <- read_rds('assuntos.rds')
+leafs <- assuntos %>%
+  filter(titulo0 %in% c("DIREITO DO CONSUMIDOR",
+                        "DIREITO CIVIL",
+                        "DIREITO INTERNACIONAL",
+                        "DIREITO TRIBUTÁRIO",
+                        "DIREITO PROCESSUAL CIVIL E DO TRABALHO",
+                        "DIREITO PREVIDENCIÁRIO",
+                        "DIREITO ADMINISTRATIVO E OUTRAS MATÉRIAS DO DIREITO PÚBLICO")) %>% 
+  mutate_all(funs(str_replace_na(., replacement = ""))) %>% 
+  with(c(cod_leaf, cod0, cod1, cod2, cod3, cod4)) %>% 
+  enframe() %>% 
+  set_names(c('id', 'cod_leaf')) %>% 
+  distinct(cod_leaf, .keep_all = T) %>% 
+  with(cod_leaf)
+  
+```
+
+O segundo passo do levantamento foi realizar uma pesquisa no site do TJSP para cada ano e cada assunto obtido. Isso foi feito de forma automatizada a partir da utilização de rotinas computacionais desenvolvidas pela ABJ, utilizando-se o software estatístico R. O código-fonte utilizado para essa pesquisa e os dados obtidos estão diponíveis [nesse link](https://github.com/abjur/whitelistTJSP).
+
+```{r eval=FALSE}
+s <- cjpg_session()
+
+tots <- tibble(leaf = leafs, ano = list(2015)) %>% 
+  unnest(ano) %>% 
+  group_by(leaf, ano) %>% 
+  do(result_df = {
+    parms <- cjpg_parms(s, assuntos = .$leaf,
+                        data_inicial = sprintf('%d-01-01', .$ano),
+                        data_final = sprintf('%d-12-31', .$ano))
+    caminho <- paste0('data-raw/cjpg/',.$leaf,'_',.$ano,'/')
+    dir.create(caminho)
+    cjpg(s, parms, max_pag = 10, path = caminho)
+  }) %>% 
+  ungroup() %>% 
+  unnest(result_df)
+```
+
+O terceiro passo da metodologia foi detectar as amostras em que aparece um conjunto de palavras-chave relevantes nos processos consumeristas. Para evitar falsos positivos, utilizamos uma lista pequena de termos muito importantes.
+
+- "CDC"
+- "Lei 8.078/90"
+- "Codigo de Defesa do Consumidor"
+- "Lei 7.347/85" (Lei da ação civil pública)
+
+```{r, eval = F}
+le_textos <- function(file_name){
+  xml2::read_html(file_name, encoding = 'utf-8') %>% 
+  rvest::html_nodes(css = "div[align='justify'][style='display: none;']>span") %>% 
+  rvest::html_text()}
+
+textos_raw <- list.files("data-raw/cjpg", recursive = T, full.names = T) %>% 
+  purrr::map(le_textos)
+  
+textos <- textos_raw %>% 
+  unlist %>% 
+  str_replace_all("[\n\f\t ]+"," ")
+
+comprimentos <- textos_raw %>% 
+  purrr::map(length) %>% 
+  unlist()
+
+id <- list.files("data-raw/cjpg", recursive = T, full.names = F) %>% 
+  purrr::map2(comprimentos, function(.x,.y){rep(.x, each = .y)}) %>% 
+  unlist()
+
+base_de_textos <- data_frame(arq = id) %>% 
+   separate(arq, into = c("leaf", "arq"), sep = "/") %>% 
+  mutate(texto = textos) %>% 
+  mutate(encontrou_texto = str_detect(texto, " ([Ll]ei )?8\\.?078((/90)| |$)|CDC|[Cc]ódigo (de )?[Dd]efesa (do )?[Cc]onsumidor| ([Ll]ei )?7\\.?347((/85)| |$)")) %>%
+  mutate(id_arq = leaf) %>% 
+  separate(leaf, into = c("leaf", "ano")) %>% 
+  inner_join(assuntos, by = c("leaf" = "cod_leaf"))
+
+apenas_consumeristas <- assuntos %>% 
+  filter(titulo0 == "DIREITO DO CONSUMIDOR") %>% 
+  with(unique(cod_leaf))
+
+write_rds(base_de_textos, 'base_de_textos.rds')
+```
+
+```{r}
+base_de_textos <- read_rds("base_de_textos.rds")
+```
+
+
+# Resultados
+
+A Tabela \@ref(tab:tabprop) mostra a proporção de processos em que encontrou-se pelo menos uma das palavras-chave utilizadas. Observe que todos os processos do assunto "DIREITO DO CONSUMIDOR" apresentam pelo menos uma ocorrência cada.
+
+```{r tabprop}
+base_de_textos %>%
+  group_by(titulo_leaf, titulo0) %>%
+  summarise(prop = mean(encontrou_texto)) %>% 
+  ungroup() %>% 
+  mutate(titulo0 = factor(titulo0),
+         titulo0 = fct_relevel(titulo0, "DIREITO DO CONSUMIDOR")) %>% 
+  arrange(titulo0, desc(prop))
+```
+
+Filtrando apenas as linhas da Tabela \@ref(tab:tabprop) com proporção positiva, a lista de processos "consumeristas em potencial" está descrita em \@ref(tab:tabprop2)
+
+```{r tabprop2}
+
+whitelist <- base_de_textos %>%
+  group_by(titulo_leaf, titulo0) %>%
+  summarise(prop = mean(encontrou_texto)) %>% 
+  ungroup() %>% 
+  mutate(titulo0 = factor(titulo0),
+         titulo0 = fct_relevel(titulo0, "DIREITO DO CONSUMIDOR")) %>% 
+  arrange(titulo0, desc(prop)) %>% 
+  filter(prop > 0)
+
+```
+
+## Toques finais
+
+```{r}
+
+library(tidyverse)
+library(stringr)
+library(forcats)
+library(esaj)
+library(tjsp)
+library(dplyr)
+
+<<<<<<< HEAD
+whitelist <- openxlsx::read.xlsx("../educacaoTJSP/whitelist.xlsx")
+assuntos <- read_rds('assuntos.rds')
+=======
+assuntos <- read_rds('assuntos.rds')
+whitelist <- openxlsx::read.xlsx("whitelist.xlsx")
+>>>>>>> dc49a22e459914b349e5a7fcc550355e07e8a154
+
+whitelist_completa <- whitelist %>% 
+  inner_join(assuntos, by = c('titulo_leaf', 'titulo0')) %>% 
+  select(dplyr::contains("titulo"), dplyr::contains("cod")) %>% 
+  gather('titulo','assunto', -dplyr::contains("cod")) %>% 
+  mutate(cod = ifelse(titulo == "titulo_leaf", cod_leaf,
+                      ifelse(titulo == "titulo0", cod0,
+                             ifelse(titulo == 'titulo1', cod1,
+                                    ifelse(titulo == 'titulo2', cod2,
+                                           ifelse(titulo == 'titulo3', cod3,
+                                                  ifelse(titulo == 'titulo4', cod4, NA))))))) %>% 
+  distinct(assunto, .keep_all = T) %>% 
+  select(assunto, cod)
+```
+
+<<<<<<< HEAD
+## Comparação com outras metodologias
+
+```{r read_manual_class, echo = F}
+
+class_manual_abj <- readRDS("data.rds") %>% 
+  filter(whitelist >= 0.5) %>% 
+  mutate(titulo_leaf = ifelse(n6 != '', n6,
+                              ifelse(n5 != '', n5, 
+                                     ifelse(n4 != '', n4, 
+                                            ifelse(n3 != '', n3,
+                                                   ifelse(n2 != '', n2))))))
+
+```
+
+Para avaliar a qualidade da classificação obtida de maneira "puramente jurimetrica", comparamos a tabela de assuntos obtida acima com uma lista de assuntos classificada manualmente pelos pesquisadores da ABJ. Na parte deste relatório que segue abaixo, a lista obtida de forma automática será chamada de **lista suja**, enquanto a lista obtida manualmente será chamada de **lista limpa**.
+
+Constam apenas 73 assuntos processuais na **lista limpa**, enquanto a **lista suja** possui 208 assuntos. Desses 208, apenas 4 não aparecem na **lista limpa**. Nessa lista de diferenças, chama a atenção a presença de um assunto do ramo "DIREITO DO CONSUMIDOR". O assunto faltante, "Clausulas Abusivas", não foi contabilizado pois a busca por processos desse assunto não retornou nenhum caso.
+
+```{r, }
+
+abj_sem_robo <- class_manual_abj %>% 
+  anti_join(whitelist, by = 'titulo_leaf') %>% 
+  select(n1,n2,n3,n4,n5,n6)
+
+abj_sem_robo %>% 
+  knitr::kable(format = 'markdown', caption = 'Assuntos que constam na lista limpa mas não constam na lista suja.')
+
+```
+
+Fazendo o mesmo exercício, mas no sentido inverso, detectamos 138 assuntos que aparecem apenas na lista suja, mas não na lista limpa. Existem apenas dois casos com propoção de ocorrência das palavras chave de Direito do Consumidor maior do que 50%: "Warrant" e "Expurgos inflacionários sobre os benefícios".
+
+```{r}
+
+robo_sem_abj <- whitelist %>% 
+  anti_join(class_manual_abj, by = 'titulo_leaf') %>% 
+  arrange(prop)
+ 
+robo_sem_abj %>% 
+  knitr::kable(format = 'markdown', caption = 'Assuntos que constam na lista suja mas não constam na lista limpa.')
+
+```
+
+
+=======
+## Checks and balances
+
+No código abaixo, verificamos se os códigos extraídos pelo pacote tjsp são os mesmos códigos das TPU's do CNJ.
+
+```{r, eval = F}
+library(tpur)
+
+tabela <- tpur::download_table("assunto","estadual","primeiro grau") %>% 
+  tpur::build_table()
+
+tabela_cdc <- tabela %>% 
+  filter(str_detect(dispositivo_legal, " ([Ll]ei )?8\\.?078((/90)| |$)|CDC|[Cc]ódigo (de )?[Dd]efesa (do )?[Cc]onsumidor| ([Ll]ei )?7\\.?347((/85)| |$)")|str_detect(n1, "DIREITO DO CONSUMIDOR"))
+
+merged_tables <- tabela %>% 
+  left_join(whitelist_completa, by = c('codigo' = 'cod'))
+
+merged_tables %>% 
+  filter(!is.na(assunto)) %>% 
+  select(assunto,n5,n4,n3,n2)
+```
+
