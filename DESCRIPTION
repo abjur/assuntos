@@ -10,8 +10,7 @@ LazyData: true
 Suggests: knitr,
     rmarkdown
 VignetteBuilder: knitr
-Imports: tidyverse,
-    stringr,
+Imports: stringr,
     tpur
 Remotes: abjur/tpur
 RoxygenNote: 6.0.1
