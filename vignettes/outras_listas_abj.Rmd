@@ -112,7 +112,7 @@ base_de_textos <- data_frame(arq = id) %>%
   mutate(encontrou_texto = str_detect(texto, " ([Ll]ei )?8\\.?078((/90)| |$)|CDC|[Cc]ódigo (de )?[Dd]efesa (do )?[Cc]onsumidor| ([Ll]ei )?7\\.?347((/85)| |$)")) %>%
   mutate(id_arq = leaf) %>% 
   separate(leaf, into = c("leaf", "ano")) %>% 
-  inner_join(assuntos, by = c("leaf" = "cod_leaf"))
+  left_join(assuntos, by = c("leaf" = "cod_leaf"))
 
 apenas_consumeristas <- assuntos %>% 
   filter(titulo0 == "DIREITO DO CONSUMIDOR") %>% 
